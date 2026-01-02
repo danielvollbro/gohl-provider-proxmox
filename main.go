@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	api "github.com/danielvollbro/gohl-api"
 	"github.com/luthermonson/go-proxmox"
@@ -19,6 +20,10 @@ func main() {
 	if url == "" || tokenID == "" || secret == "" {
 		fmt.Fprintf(os.Stderr, "Error: Missing Proxmox configuration (URL, USER, TOKEN)\n")
 		os.Exit(1)
+	}
+
+	if !strings.HasSuffix(url, "/api2/json") {
+		url = strings.TrimRight(url, "/") + "/api2/json"
 	}
 
 	insecureClient := &http.Client{
