@@ -12,6 +12,36 @@ import (
 	"github.com/luthermonson/go-proxmox"
 )
 
+type ClusterClient interface {
+	GetVersion(ctx context.Context) (string, error)
+	GetNodes(ctx context.Context) ([]*proxmox.NodeStatus, error)
+	GetNodeStorage(ctx context.Context, nodeName string) ([]*proxmox.Storage, error)
+}
+
+type ProxmoxClient struct {
+	client *proxmox.Client
+}
+
+func (p *ProxmoxClient) GetVersion(ctx context.Context) (string, error) {
+	v, err := p.client.Version(ctx)
+	if err != nil {
+		return "", err
+	}
+	return v.Release, nil
+}
+
+func (p *ProxmoxClient) GetNodes(ctx context.Context) ([]*proxmox.NodeStatus, error) {
+	return p.client.Nodes(ctx)
+}
+
+func (p *ProxmoxClient) GetNodeStorage(ctx context.Context, nodeName string) ([]*proxmox.Storage, error) {
+	node, err := p.client.Node(ctx, nodeName)
+	if err != nil {
+		return nil, err
+	}
+	return node.Storages(ctx)
+}
+
 func main() {
 	url := os.Getenv("GOHL_CONFIG_URL")
 	tokenID := os.Getenv("GOHL_CONFIG_TOKEN_ID")
@@ -33,39 +63,40 @@ func main() {
 	}
 
 	client := proxmox.NewClient(url,
-		proxmox.WithClient(insecureClient),
+		proxmox.WithHTTPClient(insecureClient),
 		proxmox.WithAPIToken(tokenID, secret),
 	)
 
+	wrapper := &ProxmoxClient{client: client}
+
 	ctx := context.Background()
-	version, err := client.Version(ctx)
+	checks := runChecks(ctx, wrapper)
+
+	api.PrintReport(api.ScanReport{
+		PluginID: "provider-proxmox",
+		Checks:   checks,
+	})
+}
+
+func runChecks(ctx context.Context, client ClusterClient) []api.CheckResult {
+	var checks []api.CheckResult
+
+	version, err := client.GetVersion(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to connect to Proxmox: %v\n", err)
 		os.Exit(1)
 	}
 
-	checks := runChecks(ctx, client, version)
-
-	report := api.ScanReport{
-		PluginID: "provider-proxmox",
-		Checks:   checks,
-	}
-	api.PrintReport(report)
-}
-
-func runChecks(ctx context.Context, client *proxmox.Client, version *proxmox.Version) []api.CheckResult {
-	var checks []api.CheckResult
-
 	checks = append(checks, api.CheckResult{
 		ID:          "PVE-VER",
 		Name:        "Proxmox Version",
-		Description: fmt.Sprintf("Connected to Proxmox %s", version.Release),
+		Description: fmt.Sprintf("Connected to Proxmox %s", version),
 		Passed:      true,
 		Score:       5,
 		MaxScore:    5,
 	})
 
-	nodes, err := client.Nodes(ctx)
+	nodes, err := client.GetNodes(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to fetch nodes: %v\n", err)
 		return checks
@@ -89,14 +120,8 @@ func runChecks(ctx context.Context, client *proxmox.Client, version *proxmox.Ver
 		})
 	}
 
-	for _, nodeStatus := range nodes {
-		pveNode, err := client.Node(ctx, nodeStatus.Node)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to load node object for %s: %v\n", nodeStatus.Node, err)
-			continue
-		}
-
-		storages, err := pveNode.Storages(ctx)
+	for _, node := range nodes {
+		storages, err := client.GetNodeStorage(ctx, node.Node)
 		if err == nil {
 			for _, storage := range storages {
 				if storage.Type == "zfspool" || storage.Type == "dir" || storage.Type == "lvm" || storage.Type == "nfs" {
@@ -113,8 +138,8 @@ func runChecks(ctx context.Context, client *proxmox.Client, version *proxmox.Ver
 					}
 
 					checks = append(checks, api.CheckResult{
-						ID:          fmt.Sprintf("PVE-DISK-%s-%s", nodeStatus.Node, storage.Storage),
-						Name:        fmt.Sprintf("Storage: %s on %s", storage.Storage, nodeStatus.Node),
+						ID:          fmt.Sprintf("PVE-DISK-%s-%s", node.Node, storage.Storage),
+						Name:        fmt.Sprintf("Storage: %s on %s", storage.Storage, node.Node),
 						Description: fmt.Sprintf("Usage: %.1f%% (%d GB free)", percent, (storage.Total-storage.Used)/1024/1024/1024),
 						Passed:      passed,
 						Score:       score,
@@ -124,7 +149,7 @@ func runChecks(ctx context.Context, client *proxmox.Client, version *proxmox.Ver
 				}
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "Failed to read storage for node %s: %v\n", nodeStatus.Node, err)
+			fmt.Fprintf(os.Stderr, "Failed to read storage for node %s: %v\n", node.Node, err)
 		}
 	}
 
