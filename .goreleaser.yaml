@@ -1,12 +1,12 @@
+---
 version: 2
-
-project_name: gohl
+project_name: gohl-provider-proxmox
 
 builds:
   - env:
       - CGO_ENABLED=0
-    main: ./cmd/gohl/main.go
-    binary: gohl
+    main: ./main.go
+    binary: provider-proxmox
     goos:
       - linux
       - windows
@@ -16,15 +16,11 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
+  - format: binary
     name_template: >-
-      {{ .ProjectName }}_
-      {{- .Version }}_
-      {{- .Os }}_
-      {{- .Arch }}
-    format_overrides:
-      - goos: windows
-        format: zip
+      {{ .Binary }}_
+      {{ .Os }}_
+      {{ .Arch }}
 
 checksum:
   name_template: 'checksums.txt'
